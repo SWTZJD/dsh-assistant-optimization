@@ -72,9 +72,6 @@
 			});
 			return _mermaidLoaded;
 		}
-			});
-			return _mermaidLoaded;
-		}
 
 		function _cleanupMermaidTemp(id) {
 			var candidates = [id, "d" + id];

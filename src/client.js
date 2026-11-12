@@ -283,5 +283,5 @@
 		// settingsScope：接管官方 transcriptView（dsh 0.1.2+ 默认 compact 折叠），
 		// 我们的 turn-fold 启用时强制 normal，避免双重折叠。
 		// sessions/uiConversation/conversation：会话数据注入的快照源（供给端）。
-		exports.inject = ["slots", "settingsScope", "sessions", "uiConversation", "conversation"];
+		exports.inject = ["slots", "sessions"];
 		exports.apply = apply;
