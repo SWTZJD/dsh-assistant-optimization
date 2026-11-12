@@ -109,6 +109,15 @@
 			return function () { obs.disconnect() }
 		}
 
+		function guardChain(fn) {
+			return function (key, owner, opts) {
+				try {
+					if (typeof fn === 'function') return fn(key, owner, opts)
+				} catch (err) {}
+				return opts && 'fallback' in opts ? opts.fallback : null
+			}
+		}
+
 		function createResumeContinuity(React) {
 			function ResumeMarkerAwareUserNode(props) {
 				var node = props && props.node
@@ -139,7 +148,15 @@
 				}
 				var Official = findOfficialUserRenderer(props.slots || (props._dsaoSlots || null))
 				if (Official === null) return null
-				return React.createElement(Official, props)
+				// 遮蔽官方 user cell 时不能重复声明它的 chain 子槽（register 会对已声明的
+				// 子槽抛 already declared），但官方 UserStyleBubble 每次渲染都调用
+				// renderSlotChain("conversation.chat.user.before")，该调用按「当前
+				// entry.children」校验归属、必然抛 SlotOwnershipError。异常冒到槽位边界
+				// 就会把我们的 entry 判为 abdicate 永久退役（恢复提示随之整体失效），
+				// 所以这里换成带兜底的版本。
+				var fp = Object.assign({}, props)
+				fp.renderSlotChain = guardChain(props.renderSlotChain)
+				return React.createElement(Official, fp)
 			}
 			return { ResumeMarkerAwareUserNode: ResumeMarkerAwareUserNode }
 		}

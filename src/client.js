@@ -145,9 +145,32 @@
 			window.addEventListener("dsao:turn-fold-changed", syncOfficialTranscriptView);
 
 			// 1. Wrap official assistant-step renderer
+			//    遮蔽官方 cell 有两个硬约束（都实测过）：
+			//    (a) 不能声明 children —— 官方 entry 已经声明过
+			//        "conversation.chat.reasoning.body" / "conversation.chat.message.images"，
+			//        register() 对已声明的子槽直接抛 "already declared"；
+			//    (b) 但官方组件会 renderSlot / renderSlotChain 这两个子槽，而 renderSlot
+			//        按「当前 entry.children」校验归属，我们没声明就抛 SlotOwnershipError，
+			//        槽位边界随即把我们的 entry 记为 abdicate 永久退役、官方渲染器接管，
+			//        原始 <think> 文本就漏出来了 —— 这正是「时好时坏」的成因
+			//        （展开思考行或消息带图片时才触发，所以看起来是随机的）。
+			//    结论：children 不复制，改为把 inject 面（usePresentation / fileMentions /
+			//    resolveFilePath）从官方 entry 转借过来，并在包装层把 renderSlot(Chain)
+			//    换成带兜底的版本，绝不让异常逃到槽位边界。
+			function shadowOptions(key) {
+				var opts = { name: "conversation.chat.node", key: key, priority: -1, locale: "conversation" };
+				// inject 面在渲染期按 (entry × 会话绑定) 取值，所以每次现查官方 entry，
+				// 官方若在别处重注册也能跟上；查不到时退化为空面（官方同样如此）。
+				opts.inject = function (sessionId) {
+					var live = wrapper.findOfficialEntry(slots, key);
+					if (live && typeof live.inject === "function") return live.inject(sessionId);
+					return {};
+				};
+				return opts;
+			}
 			slots.inject("conversation.chat.node", function () {
 				return slots.register(
-					{ name: "conversation.chat.node", key: "assistant-step", priority: -1, locale: "conversation" },
+					shadowOptions("assistant-step"),
 					function (rawProps) {
 						var official = wrapper.findOfficialRenderer(slots);
 						var wrapperProps = Object.assign({}, rawProps, { _officialRenderer: official, _rawProps: rawProps });
@@ -243,7 +266,7 @@
 			var resumeRC = resumeContinuity.createResumeContinuity(React);
 			slots.inject("conversation.chat.node", function () {
 				return slots.register(
-					{ name: "conversation.chat.node", key: "user", priority: -1, locale: "conversation" },
+					shadowOptions("user"),
 					function (rawProps) {
 						return React.createElement(resumeRC.ResumeMarkerAwareUserNode, rawProps);
 					}
