@@ -10,7 +10,8 @@
 //            —— 机械回灌：src 从此与线上行为 1:1。
 //   build    src → lib：按 manifest 把 src 文件重新包进各自的 head/tail，
 //            生成 lib/client.js。此后 lib 是产物，永远不要再手改。
-//   verify   build 输出与现有 lib 逐字节比对，证明往返无损。
+//   verify   build 输出与现有 lib 逐字节比对，证明往返无损（行尾 CRLF/LF
+//            先归一，避免 autocrlf 工作区误报）。
 //
 // 保真约定：head/body/tail 全部原样捕获（各块缩进/空行习惯不一：多数
 // 2-tab、model-compact 1-tab、markers 的 return 前无空行——全部按字节
@@ -118,7 +119,9 @@ function buildText() {
   const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
   const parts = [manifest.fileHeader.join('\n')];
   manifest.order.forEach((id, idx) => {
-    const raw = fs.readFileSync(srcPathFor(id), 'utf8');
+    // 行尾归一：src 里 CRLF / LF 混杂（client.js 是 CRLF、modules 多为 LF），
+    // 不归一的话 \r 会被带进产物，build 写盘时又被剥掉，verify 就永远对不上。
+    const raw = fs.readFileSync(srcPathFor(id), 'utf8').replace(/\r/g, '');
     const body = raw.split('\n');
     while (body.length && body[body.length - 1] === '') body.pop();
     const meta = manifest.blocks[id];
@@ -138,12 +141,18 @@ function modeBuild() {
 function modeVerify() {
   const original = fs.readFileSync(LIB, 'utf8');
   const rebuilt = buildText();
-  if (original === rebuilt) {
-    console.log(`verify: 往返无损（${original.split('\n').length} 行逐字节一致）`);
+  // 按内容比对：行尾差异（磁盘 CRLF vs 构建 LF）不算失真，否则 git autocrlf
+  // 的工作区永远 verify 失败。
+  const normalize = (s) => s.replace(/\r/g, '');
+  const normalizedOriginal = normalize(original);
+  const normalizedRebuilt = normalize(rebuilt);
+  if (normalizedOriginal === normalizedRebuilt) {
+    const eolNote = original === rebuilt ? '' : '（磁盘为 CRLF，内容已归一比对）';
+    console.log(`verify: 往返无损（${normalizedOriginal.split('\n').length} 行逐字节一致）${eolNote}`);
     return;
   }
-  const a = original.split('\n');
-  const b = rebuilt.split('\n');
+  const a = normalizedOriginal.split('\n');
+  const b = normalizedRebuilt.split('\n');
   let bad = 0;
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     if (a[i] !== b[i]) {
