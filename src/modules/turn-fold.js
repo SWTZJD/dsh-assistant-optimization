@@ -514,7 +514,14 @@
 
 		function stripColumn(column) {
 			var hidden = column.querySelectorAll("[data-dsao-tf-hidden]");
-			for (var i = 0; i < hidden.length; i++) hidden[i].removeAttribute("data-dsao-tf-hidden");
+			for (var i = 0; i < hidden.length; i++) {
+				hidden[i].removeAttribute("data-dsao-tf-hidden");
+				hidden[i].removeAttribute("data-dsao-tf-owner");
+			}
+			// owner 标记可能残留在已不再隐藏的节点上（展开后又被官方重投影），
+			// 单独清一遍，避免下次点击按 turn 号误命中别的轮次。
+			var owned = column.querySelectorAll("[data-dsao-tf-owner]");
+			for (var o = 0; o < owned.length; o++) owned[o].removeAttribute("data-dsao-tf-owner");
 			var closing = column.querySelectorAll("[data-dsao-tf-closing-folded]");
 			for (var n = 0; n < closing.length; n++) closing[n].removeAttribute("data-dsao-tf-closing-folded");
 			var endMarks0 = column.querySelectorAll("[data-dsao-tf-process-end]");
@@ -561,12 +568,16 @@
 
 			var toHide = {};
 			var toCloseFold = {};
+			var ownerOf = {};
 			var f;
 			for (f = 0; f < plan.folds.length; f++) {
 				var fold = plan.folds[f];
 				if (expandedSet[fold.turn]) continue;
 				var hk;
-				for (hk = 0; hk < fold.hiddenKeys.length; hk++) toHide[fold.hiddenKeys[hk]] = true;
+				for (hk = 0; hk < fold.hiddenKeys.length; hk++) {
+					toHide[fold.hiddenKeys[hk]] = true;
+					ownerOf[fold.hiddenKeys[hk]] = fold.turn;
+				}
 				if (fold.closingKey) toCloseFold[fold.closingKey] = true;
 			}
 
@@ -575,8 +586,12 @@
 				var el = byKey[k2];
 				if (toHide[k2]) {
 					if (!el.hasAttribute("data-dsao-tf-hidden")) el.setAttribute("data-dsao-tf-hidden", "");
-				} else if (el.hasAttribute("data-dsao-tf-hidden")) {
-					el.removeAttribute("data-dsao-tf-hidden");
+					// owner：把「这个节点属于第几轮」写进 DOM，折叠头开合时按它定位，
+					// 不再依赖会话快照（快照缺席时 sync 会整列 strip，点击就失效）。
+					el.setAttribute("data-dsao-tf-owner", String(ownerOf[k2]));
+				} else {
+					if (el.hasAttribute("data-dsao-tf-hidden")) el.removeAttribute("data-dsao-tf-hidden");
+					if (el.hasAttribute("data-dsao-tf-owner")) el.removeAttribute("data-dsao-tf-owner");
 				}
 				if (toCloseFold[k2]) {
 					if (!el.hasAttribute("data-dsao-tf-closing-folded")) el.setAttribute("data-dsao-tf-closing-folded", "");
@@ -934,7 +949,14 @@
 							}
 							return;
 						}
-						if (!session || !session.chat) return;
+						if (!session || !session.chat) {
+							// 没有会话快照就算不出折叠计划。此时必须把自己留下的痕迹
+							// 全部拆掉：否则内容被 display:none 藏住、又没有任何入口
+							// 能打开，就是「折了、打不开、直接没了」。
+							var orphanCols = columnList();
+							for (var oc = 0; oc < orphanCols.length; oc++) stripColumn(orphanCols[oc]);
+							return;
+						}
 						var plan = planTurnFold(session);
 						if (!plan.keySet) return;
 						var expandedSet = sessionId !== "" ? (userExpanded[sessionId] || {}) : {};
@@ -1037,14 +1059,25 @@
 						if (!header) return;
 						e.preventDefault();
 						e.stopPropagation();
-						var sessionId = resolveSessionId();
-						if (sessionId === "") return;
 						var turn = parseInt(header.getAttribute("data-dsao-tf-header"), 10);
 						if (isNaN(turn)) return;
-						if (!userExpanded[sessionId]) userExpanded[sessionId] = {};
-						var map = userExpanded[sessionId];
-						if (map[turn]) delete map[turn];
-						else map[turn] = true;
+						var expanding = header.getAttribute("data-dsao-tf-state") !== "expanded";
+						var sessionId = resolveSessionId();
+						if (sessionId !== "") {
+							if (!userExpanded[sessionId]) userExpanded[sessionId] = {};
+							var map = userExpanded[sessionId];
+							if (expanding) map[turn] = true;
+							else delete map[turn];
+						}
+						// 先把结果直接落到 DOM，再让 sync() 收敛。会话 id 解析不出来时
+						// sync() 会整列 strip，只依赖它会让点击看起来毫无反应。
+						var owned = doc.querySelectorAll('[data-dsao-tf-owner="' + turn + '"]');
+						for (var i = 0; i < owned.length; i++) {
+							if (expanding) owned[i].removeAttribute("data-dsao-tf-hidden");
+							else owned[i].setAttribute("data-dsao-tf-hidden", "");
+						}
+						header.setAttribute("data-dsao-tf-state", expanding ? "expanded" : "collapsed");
+						header.setAttribute("aria-expanded", expanding ? "true" : "false");
 						sync();
 					}
 					function onClick(e) { onToggle(e); }

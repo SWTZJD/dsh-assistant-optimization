@@ -55,7 +55,25 @@
 
 		var _styleInjected = false;
 
-		function ensureStyles() {
+		// ── 过程折叠总开关 ────────────────────────────────────────────────
+		// 与 turn-fold 共用同一个 localStorage 键：设置面板里的那一个开关同时控制
+		// 「回合过程折叠」与「工具调用分组」。关闭时本模块只拆除自己的注入，绝不
+		// 隐藏任何内容（旧版本没有开关、常开，这是用户抱怨「命令被折叠」的来源）。
+		var ENABLED_KEY = "dsao:turn-fold-enabled";
+		function processFoldEnabled() {
+			try {
+				var raw = localStorage.getItem(ENABLED_KEY);
+				if (raw !== null) return raw === "1";
+			} catch (e) {}
+			return true;
+		}
+
+		// 组 id：每次 applyGroup 重新编号，成员与组头共享同一 id。点击时按 id 取
+		// 成员，不再依赖「从组头向后走兄弟节点」的推断——DOM 一旦变动（官方 turn
+		// 折叠、窗口重投影）推断会得到不足 2 个成员，于是折叠了却点不开。
+		var groupSeq = 0;
+
+	function ensureStyles() {
 			if (_styleInjected) return;
 			if (typeof document === "undefined") return;
 			if (document.getElementById("dsao-tool-group-css")) { _styleInjected = true; return; }
@@ -245,10 +263,20 @@
 		function applyExpand(header, group) {
 			header.setAttribute("data-dsao-tg-state", "expanded");
 			header.setAttribute("aria-expanded", "true");
+			// 组头自身可能被 syncOneHeader 跟随官方折叠设了 hidden，展开时必须解除。
+			if (header.hasAttribute("hidden")) header.removeAttribute("hidden");
 			for (var i = 0; i < group.length; i++) {
 				group[i].removeAttribute("data-dsao-tg-collapsed");
+				// 官方 turn 折叠对过程成员设 hidden="until-found"（不是我们能开合的
+				// 属性）。只解自己的 data-dsao-tg-collapsed 时，组已展开而成员仍被
+				// 官方藏住，表现就是「点了没反应、内容直接没了」。
+				if (group[i].hasAttribute("hidden")) group[i].removeAttribute("hidden");
 			}
 			markSpanThinking(header, group, false);
+			var thinks = thinkingStepsInSpan(header, group[group.length - 1]);
+			for (var k = 0; k < thinks.length; k++) {
+				if (thinks[k].hasAttribute("hidden")) thinks[k].removeAttribute("hidden");
+			}
 		}
 
 		function toggleGroup(header, group) {
@@ -268,6 +296,31 @@
 				node = node.nextElementSibling;
 			}
 			return items;
+		}
+
+		// 按组 id 取成员：组头自身带 data-dsao-tg-gid，必须排除。
+		function membersOfGid(gid) {
+			var out = [];
+			if (!gid || typeof document === "undefined") return out;
+			var all = document.querySelectorAll('[data-dsao-tg-gid="' + gid + '"]');
+			for (var i = 0; i < all.length; i++) {
+				if (all[i].getAttribute("data-dsao-tg-header") !== null) continue;
+				out.push(all[i]);
+			}
+			return out;
+		}
+
+		// 点击开合：优先按 id 取成员；取不到时退回旧的相邻推断；仍然取不到就至少
+		// 把组头切到展开态，让用户看到「这里本该有内容」而不是死锁在折叠态。
+		function toggleByGid(header) {
+			var gid = header.getAttribute("data-dsao-tg-gid");
+			var live = membersOfGid(gid);
+			if (live.length < 2) live = collectGroupFromHeader(header);
+			if (live.length < 2) {
+				applyExpand(header, live);
+				return;
+			}
+			toggleGroup(header, live);
 		}
 
 		function markGroupItem(el, pos) {
@@ -301,22 +354,26 @@
 				var pos = i === 0 ? "first" : (i === group.length - 1 ? "last" : "middle");
 				markGroupItem(group[i], pos);
 			}
+			groupSeq++;
+			var gid = "g" + groupSeq;
+			for (var gi = 0; gi < group.length; gi++) {
+				group[gi].setAttribute("data-dsao-tg-gid", gid);
+			}
 			if (!headerExists) {
 				var header = createHeader(group);
 				header.setAttribute("data-dsao-tg-size", String(group.length));
+				header.setAttribute("data-dsao-tg-gid", gid);
 				first.parentNode.insertBefore(header, first);
 				header.addEventListener("click", function (e) {
 					e.stopPropagation();
 					header.setAttribute("data-dsao-tg-user", "");
-					var liveGroup = collectGroupFromHeader(header);
-					if (liveGroup.length >= 2) toggleGroup(header, liveGroup);
+					toggleByGid(header);
 				});
 				header.addEventListener("keydown", function (e) {
 					if (e.key === "Enter" || e.key === " ") {
 						e.preventDefault(); e.stopPropagation();
 						header.setAttribute("data-dsao-tg-user", "");
-						var liveGroup = collectGroupFromHeader(header);
-						if (liveGroup.length >= 2) toggleGroup(header, liveGroup);
+						toggleByGid(header);
 					}
 				});
 				// See groupShouldExpand: the latest group stays expanded for the
@@ -330,6 +387,7 @@
 				}
 			} else {
 				existingHeader.setAttribute("data-dsao-tg-size", String(group.length));
+				existingHeader.setAttribute("data-dsao-tg-gid", gid);
 				var state = existingHeader.getAttribute("data-dsao-tg-state");
 				if (state === "collapsed") {
 					for (var j = 0; j < group.length; j++) group[j].setAttribute("data-dsao-tg-collapsed", "");
@@ -596,6 +654,7 @@
 
 		function fullPipeline(root) {
 			if (!root || !root.querySelectorAll) return;
+			if (!processFoldEnabled()) { resetToolGroups(); return; }
 			ensureStyles();
 			// 列域扫描：组/标记/思考行都活在 [data-chat-flow] 列内，按列收窄查询
 			// （body 全树扫描会把侧栏/设置面板一起遍历）。单列时直接用列做根。
@@ -863,6 +922,12 @@
 					else performAttrScan();
 				}, 80);
 			};
+			// 设置面板里的开关翻转时：关 → 拆注入；开 → 重扫重建。
+			var onSettingChange = function () {
+				if (!processFoldEnabled()) { resetToolGroups(); return; }
+				performFullScan();
+			};
+			try { window.addEventListener("dsao:turn-fold-changed", onSettingChange); } catch (e) {}
 			performFullScan(); // initial load: one full scan, caches lastLatest
 			var obs = new MutationObserver(onMutations);
 			obs.observe(document.body, {
@@ -875,6 +940,7 @@
 			return function () {
 				if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
 				pending = null;
+				try { window.removeEventListener("dsao:turn-fold-changed", onSettingChange); } catch (e) {}
 				obs.disconnect();
 			};
 		}

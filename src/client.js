@@ -283,6 +283,44 @@
 					turnFold.createTurnFold(React, toolGroup.resetToolGroups, toolGroup.scanToolGroups).TurnFoldMount
 				);
 			});
+			// 3e. 过程折叠总开关（输入行常驻）：本 profile 的 ui-settings 被禁用
+			//     （cordis.patch.yml 里 `ui-settings: enabled:false`），设置页那一项
+			//     永远挂不上，开关必须有第二个不依赖设置页的入口。它与设置页共用
+			//     同一个 localStorage 键（dsao:turn-fold-enabled）和同一个事件，
+			//     两个入口的状态天然同步，同时控制回合折叠与工具调用分组。
+			slots.inject("conversation.input.right", function () {
+				function FoldSwitchMount() {
+					var s = React.useState(turnFold.loadEnabled());
+					var enabled = s[0], setEnabled = s[1];
+					React.useEffect(function () {
+						var handler = function () { setEnabled(turnFold.loadEnabled()); };
+						window.addEventListener("dsao:turn-fold-changed", handler);
+						return function () { window.removeEventListener("dsao:turn-fold-changed", handler); };
+					}, []);
+					return React.createElement("button", {
+						type: "button",
+						"data-dsao-fold-switch": enabled ? "on" : "off",
+						title: enabled
+							? "过程折叠：开 —— 已完成回合的思考与命令会收起成一行，点击该行可展开；点此关闭"
+							: "过程折叠：关 —— 思考与命令始终完整展开；点此开启",
+						"aria-pressed": enabled ? "true" : "false",
+						onClick: function () { turnFold.saveEnabled(!enabled); },
+						style: {
+							display: "inline-flex", alignItems: "center",
+							height: "24px", padding: "0 8px", marginRight: "4px",
+							borderRadius: "6px", cursor: "pointer", whiteSpace: "nowrap",
+							border: "1px solid rgba(127,127,127,0.35)",
+							background: enabled ? "rgba(127,127,127,0.14)" : "transparent",
+							color: "inherit", font: "inherit", fontSize: "12px", lineHeight: "1",
+							opacity: enabled ? "1" : "0.6"
+						}
+					}, enabled ? "折叠 开" : "折叠 关");
+				}
+				return slots.register(
+					{ name: "conversation.input.right", id: "dsao-fold-switch", order: 120, locale: "conversation" },
+					FoldSwitchMount
+				);
+			});
 			// 4. Mermaid post-processor
 			ctx.effect(function () { return mermaid.startMermaidObserver(); });
 
