@@ -154,9 +154,13 @@
 			//        槽位边界随即把我们的 entry 记为 abdicate 永久退役、官方渲染器接管，
 			//        原始 <think> 文本就漏出来了 —— 这正是「时好时坏」的成因
 			//        （展开思考行或消息带图片时才触发，所以看起来是随机的）。
-			//    结论：children 不复制，改为把 inject 面（usePresentation / fileMentions /
-			//    resolveFilePath）从官方 entry 转借过来，并在包装层把 renderSlot(Chain)
-			//    换成带兜底的版本，绝不让异常逃到槽位边界。
+			//    结论：children 不能通过 register() 复制（官方已声明 → 抛 already declared），
+			//    改为两步：① inject 面（usePresentation / fileMentions / resolveFilePath）
+			//    从官方 entry 转借；② 注册后把子槽归属补写到自己的 entry 上
+			//    （wrapper.adoptChildren），让 renderSlot 的归属校验通过，官方渲染器就能
+			//    正常渲染 reasoning.body / message.images / user.before —— 第三方往这些
+			//    子槽注册的渲染器（如「思考过程机器翻译」）也因此重新生效。
+			//    包装层仍把 renderSlot(Chain) 换成带兜底的版本，异常绝不逃到槽位边界。
 			function shadowOptions(key) {
 				var opts = { name: "conversation.chat.node", key: key, priority: -1, locale: "conversation" };
 				// inject 面在渲染期按 (entry × 会话绑定) 取值，所以每次现查官方 entry，
@@ -169,7 +173,7 @@
 				return opts;
 			}
 			slots.inject("conversation.chat.node", function () {
-				return slots.register(
+				var dispose = slots.register(
 					shadowOptions("assistant-step"),
 					function (rawProps) {
 						var official = wrapper.findOfficialRenderer(slots);
@@ -177,6 +181,9 @@
 						return React.createElement(wrapper.WrappedAssistantStep, wrapperProps);
 					}
 				);
+				// 把子槽归属补写到自己那条 entry 上，官方渲染器才拿得到 renderSlot 能力。
+				wrapper.adoptChildren(slots, "assistant-step");
+				return dispose;
 			});
 
 			// 1b. (v1.8.0 removed) dsh 0.1.2 official ToolRow renders native
@@ -265,12 +272,16 @@
 			resumeContinuity.provideSlots(slots);
 			var resumeRC = resumeContinuity.createResumeContinuity(React);
 			slots.inject("conversation.chat.node", function () {
-				return slots.register(
+				var dispose = slots.register(
 					shadowOptions("user"),
 					function (rawProps) {
 						return React.createElement(resumeRC.ResumeMarkerAwareUserNode, rawProps);
 					}
 				);
+				// user 行的 renderSlotChain("conversation.chat.user.before") 无条件调用，
+				// 同样需要把归属补写到自己的 entry 上，否则第三方往该链注册的视图全丢。
+				wrapper.adoptChildren(slots, "user");
+				return dispose;
 			});
 			// 3d. 回合过程折叠：隐藏锚点挂在输入行，同步器观察聊天列 DOM +
 			//     会话快照，把已完成 turn 的过程收起为「已完成 · 时长」一行。

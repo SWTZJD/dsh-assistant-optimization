@@ -155,7 +155,49 @@
 			);
 		}
 
+		// ── 遮蔽条目的子槽归属 ────────────────────────────────────────────
+		// register() 不允许遮蔽条目声明子槽（官方 entry 已经声明过，再声明会抛
+		// `slot "..." is already declared`）。但官方渲染器会 renderSlot /
+		// renderSlotChain 这两个子槽，而 renderSlot 只按「当前条目自己的 children」
+		// 校验归属：没声明就抛 SlotOwnershipError，槽位边界随即把我们的条目记为
+		// abdicate 永久退役、官方渲染器接管 —— 原始 <think> 文本漏出来，且第三方往
+		// conversation.chat.reasoning.body 注册的渲染器（例如「思考过程机器翻译」的
+		// TranslationBody）再也挂不上。
+		// 不改框架、不改官方插件的唯一办法：注册成功后，把「本条目声明了哪些子槽」
+		// 补写到自己那条 entry 上。entriesOfSlot 返回的正是渲染期实际使用的 entry
+		// 对象，standardKit 也读它的 children 决定要不要发 renderSlot 能力。子槽的
+		// kind/scope 仍以官方已声明的 spec 为准，这里只补归属声明，所以槽位照常渲染
+		// 官方/第三方注册的 occupant。
+		var SHADOW_CHILDREN = {
+			"assistant-step": {
+				"conversation.chat.reasoning.body": { kind: "single", scope: "session" },
+				"conversation.chat.message.images": { kind: "single", scope: "session" }
+			},
+			user: {
+				"conversation.chat.user.before": { kind: "chain", scope: "session" }
+			}
+		};
+
+		function adoptChildren(slots, key) {
+			var table = SHADOW_CHILDREN[key];
+			if (!table || !slots || typeof slots.entriesOfSlot !== "function") return false;
+			try {
+				var winners = slots.entriesOfSlot("conversation.chat.node") || [];
+				for (var i = 0; i < winners.length; i++) {
+					var entry = winners[i];
+					if (!entry || !entry.options) continue;
+					if (entry.options.key !== key) continue;
+					if ((entry.options.priority ?? 0) !== -1) continue;
+					if (entry.children !== void 0) return true;
+					entry.children = table;
+					return true;
+				}
+			} catch (err) { /* 拿不到 entry 就退回 guardRenderSlot 的兜底 */ }
+			return false;
+		}
+
 		exports.WrappedAssistantStep = WrappedAssistantStep;
+		exports.adoptChildren = adoptChildren;
 		exports.WrappedToolCallRow = WrappedToolCallRow;
 		exports.findOfficialRenderer = findOfficialRenderer;
 		exports.findOfficialEntry = findOfficialEntry;
