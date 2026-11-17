@@ -338,9 +338,15 @@
 			// 5. Tool-call grouping: collapse consecutive tool-call rows into a group
 			ctx.effect(function () { return toolGroup.startToolGroupObserver(); });
 
-			// 6. 断点续发行折叠：DOM 层后备，把官方渲染的空 marker 气泡替换为
-			//    「已从中断处继续」提示行（slot 遮蔽未生效时的双保险）。
-			ctx.effect(function () { return resumeContinuity.startResumeHintObserver(); });
+			// 6. 断点续发行折叠（DOM 层后备）——已停用。
+			//    该兜底原本会把「没有气泡且 stack 文本为空」的用户行整段重写：
+			//    `while (row.firstChild) row.removeChild(...)` 删掉的是 React 管理的
+			//    子树，删完 React 不会补回，这条用户消息就在本页永久消失，且后续
+			//    unmount 会抛 NotFoundError。展开/收起折叠会触发大批 DOM mutation，
+			//    扫描紧随其后，于是表现为「有时候一展开折叠，我发的消息就没了」。
+			//    机制 A（ResumeMarkerAwareUserNode 按 data.source.dsaoResume 判定）
+			//    已经覆盖真正的续跑标记，这条 DOM 兜底不再需要。
+			ctx.effect(function () { return function () {}; });
 			// 7. Model selector compact: tag + CSS narrow-mode
 			ctx.effect(function () { return modelCompact.startModelSelectorCompact(); });
 

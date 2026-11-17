@@ -38,6 +38,48 @@
 			return null
 		}
 
+		/**
+		 * 现查官方 user 渲染器（不走缓存）。缓存可能因注册时序陈旧，组件必须能
+		 * 在渲染期自救：否则返回 null 会把整条用户消息渲染成空白。
+		 */
+		function findOfficialUserRendererFresh(slots) {
+			var s = slots || _slotsRef
+			if (!s || typeof s.entries !== 'function') return null
+			try {
+				var entries = s.entries('conversation.chat.node')
+				if (!entries) return null
+				for (var i = 0; i < entries.length; i++) {
+					var e = entries[i]
+					if (e.options && e.options.key === 'user' && (e.options.priority ?? 0) === 0) {
+						if (e.component) _officialUserCache = e.component
+						return e.component || null
+					}
+				}
+			} catch (err) {}
+			return null
+		}
+
+		/** 官方渲染器取不到时的降级：把用户消息的纯文本原样铺出来，绝不渲染成空。 */
+		function fallbackUserNode(React, node) {
+			var text = ''
+			try {
+				var content = node && node.data && node.data.content
+				var parts = []
+				if (Array.isArray(content)) {
+					for (var i = 0; i < content.length; i++) {
+						var b = content[i]
+						if (b && b.type === 'text' && typeof b.text === 'string') parts.push(b.text)
+					}
+				}
+				text = parts.join('\n')
+			} catch (err) {}
+			try { console.warn('[DSAO] user 行取不到官方渲染器，降级为纯文本渲染（消息未丢失）') } catch (err) {}
+			return React.createElement('div', {
+				'data-dsao-user-fallback': '',
+				style: { whiteSpace: 'pre-wrap', padding: '10px 16px' },
+			}, text)
+		}
+
 		function isResumeMarker(node) {
 			if (node === null || node === undefined || typeof node !== 'object') return false
 			var data = node.data
@@ -80,9 +122,10 @@
 				line.style.cssText = 'width:14px;height:1px;flex:none;background:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));opacity:0.6'
 				hint.appendChild(line)
 				hint.appendChild(document.createTextNode(HINT_TEXT))
-				while (row.firstChild) row.removeChild(row.firstChild)
-				row.appendChild(hint)
-				row.style.alignItems = 'flex-start'
+				// 绝不整段删除行内子节点：row 是 React 管理的子树，外部 removeChild
+				// 会让这条用户消息永久消失（React 不会补回），并在后续 unmount 时抛
+				// NotFoundError。改为把提示作为行的兄弟节点插到它前面，行本身不动。
+				if (row.parentNode) row.parentNode.insertBefore(hint, row)
 			}
 
 			function scan(root) {
@@ -147,7 +190,10 @@
 					)
 				}
 				var Official = findOfficialUserRenderer(props.slots || (props._dsaoSlots || null))
-				if (Official === null) return null
+				// 缓存可能陈旧：渲染期现查一次，仍取不到就降级为纯文本，
+				// 绝不 return null（那等于把用户自己发的消息渲染没了）。
+				if (!Official) Official = findOfficialUserRendererFresh(props.slots || (props._dsaoSlots || null))
+				if (!Official) return fallbackUserNode(React, node)
 				// 遮蔽官方 user cell 时不能重复声明它的 chain 子槽（register 会对已声明的
 				// 子槽抛 already declared），但官方 UserStyleBubble 每次渲染都调用
 				// renderSlotChain("conversation.chat.user.before")，该调用按「当前
@@ -165,5 +211,7 @@
 		exports.createResumeContinuity = createResumeContinuity
 		exports.isResumeMarker = isResumeMarker
 		exports.findOfficialUserRenderer = findOfficialUserRenderer
+		exports.findOfficialUserRendererFresh = findOfficialUserRendererFresh
+		exports.fallbackUserNode = fallbackUserNode
 		exports.startResumeHintObserver = startResumeHintObserver
 		exports.HINT_TEXT = HINT_TEXT

@@ -453,6 +453,17 @@
 			return null;
 		}
 
+		/**
+		 * 受保护的 flow 节点：用户输入、插话、命令、回合尾巴行。任何折叠逻辑都不许
+		 * 隐藏它们——隐藏一次就是「我发的消息没了」，用户无从恢复。
+		 */
+		var PROTECTED_KINDS = { user: true, steering: true, command: true, "command-input": true, "turn-tail": true };
+		function isProtectedFlowNode(el) {
+			if (!el || !el.getAttribute) return false;
+			var kind = el.getAttribute("data-chat-flow-kind");
+			return kind !== null && PROTECTED_KINDS[kind] === true;
+		}
+
 		function isFlowItemEl(el) {
 			return !!(el && el.getAttribute && el.getAttribute("data-chat-flow-key") !== null);
 		}
@@ -584,7 +595,7 @@
 			var k2;
 			for (k2 in byKey) {
 				var el = byKey[k2];
-				if (toHide[k2]) {
+				if (toHide[k2] && !isProtectedFlowNode(el)) {
 					if (!el.hasAttribute("data-dsao-tf-hidden")) el.setAttribute("data-dsao-tf-hidden", "");
 					// owner：把「这个节点属于第几轮」写进 DOM，折叠头开合时按它定位，
 					// 不再依赖会话快照（快照缺席时 sync 会整列 strip，点击就失效）。
@@ -593,7 +604,7 @@
 					if (el.hasAttribute("data-dsao-tf-hidden")) el.removeAttribute("data-dsao-tf-hidden");
 					if (el.hasAttribute("data-dsao-tf-owner")) el.removeAttribute("data-dsao-tf-owner");
 				}
-				if (toCloseFold[k2]) {
+				if (toCloseFold[k2] && !isProtectedFlowNode(el)) {
 					if (!el.hasAttribute("data-dsao-tf-closing-folded")) el.setAttribute("data-dsao-tf-closing-folded", "");
 				} else if (el.hasAttribute("data-dsao-tf-closing-folded")) {
 					el.removeAttribute("data-dsao-tf-closing-folded");
@@ -729,6 +740,23 @@
 			var seps = column.querySelectorAll("[data-dsao-tf-header],[data-dsao-tf-running]");
 			for (var sp = 0; sp < seps.length; sp++) {
 				seps[sp].style.borderBottom = "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))";
+			}
+
+			// 自愈不变量：受保护节点上永远不该存在任何隐藏标记。历史版本遗留、
+			// 或未来某条路径手滑，都在这里一次性纠正，并把痕迹留到控制台。
+			healProtectedHides(column);
+		}
+
+		/** 清掉受保护节点上的折叠隐藏标记（幂等；每列每次同步跑一次）。 */
+		function healProtectedHides(column) {
+			if (!column || !column.querySelectorAll) return;
+			var hidden = column.querySelectorAll("[data-dsao-tf-hidden],[data-dsao-tf-closing-folded]");
+			for (var i = 0; i < hidden.length; i++) {
+				if (!isProtectedFlowNode(hidden[i])) continue;
+				hidden[i].removeAttribute("data-dsao-tf-hidden");
+				hidden[i].removeAttribute("data-dsao-tf-owner");
+				hidden[i].removeAttribute("data-dsao-tf-closing-folded");
+				try { console.warn("[DSAO] 受保护节点被折叠逻辑隐藏，已自动恢复", hidden[i].getAttribute("data-chat-flow-kind")); } catch (e) {}
 			}
 		}
 
@@ -1071,8 +1099,12 @@
 						}
 						// 先把结果直接落到 DOM，再让 sync() 收敛。会话 id 解析不出来时
 						// sync() 会整列 strip，只依赖它会让点击看起来毫无反应。
-						var owned = doc.querySelectorAll('[data-dsao-tf-owner="' + turn + '"]');
+						// 只在折叠头所在的列内按 owner 定位：turn 号跨会话/跨并排列会重复，
+						// 用 document 查询会误伤别的会话里同号 turn 的节点。
+						var scope = header.closest("[data-chat-flow]") || header.parentElement || doc;
+						var owned = scope.querySelectorAll('[data-dsao-tf-owner="' + turn + '"]');
 						for (var i = 0; i < owned.length; i++) {
+							if (isProtectedFlowNode(owned[i])) continue;
 							if (expanding) owned[i].removeAttribute("data-dsao-tf-hidden");
 							else owned[i].setAttribute("data-dsao-tf-hidden", "");
 						}

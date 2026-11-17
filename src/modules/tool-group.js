@@ -249,10 +249,31 @@
 			}
 		}
 
+		// 受保护的 flow 节点：用户输入、插话、命令、回合尾巴行。工具分组绝不能把它们收起。
+		var PROTECTED_KINDS = { user: true, steering: true, command: true, "command-input": true, "turn-tail": true };
+		function isProtectedFlow(el) {
+			if (!el || !el.getAttribute) return false;
+			var kind = el.getAttribute("data-chat-flow-kind");
+			return kind !== null && PROTECTED_KINDS[kind] === true;
+		}
+
+		/** 自愈：清掉误加在受保护节点上的收起标记（幂等，全扫时跑一次）。 */
+		function healProtectedCollapse() {
+			if (typeof document === "undefined") return;
+			var marked = document.querySelectorAll("[data-dsao-tg-collapsed]");
+			for (var i = 0; i < marked.length; i++) {
+				if (!isProtectedFlow(marked[i])) continue;
+				marked[i].removeAttribute("data-dsao-tg-collapsed");
+				try { console.warn("[DSAO] 受保护节点被工具分组收起，已自动恢复", marked[i].getAttribute("data-chat-flow-kind")); } catch (e) {}
+			}
+		}
+
 		function applyCollapse(header, group) {
 			header.setAttribute("data-dsao-tg-state", "collapsed");
 			header.setAttribute("aria-expanded", "false");
 			for (var i = 0; i < group.length; i++) {
+				// 受保护节点（用户消息/插话/命令/回合尾巴行）永远不收起。
+				if (isProtectedFlow(group[i])) continue;
 				group[i].setAttribute("data-dsao-tg-collapsed", "");
 			}
 			markSpanThinking(header, group, true);
@@ -681,6 +702,8 @@
 			// 同组首个官方成员的 hidden 状态（折叠随官方走）。
 			syncHeadersToTurnFolds(groups);
 			for (var r0 = 0; r0 < anchors.length; r0++) restoreColumnAnchor(anchors[r0]);
+			// 不变量：受保护节点（用户消息等）永不带有收起标记。
+			healProtectedCollapse();
 		}
 
 		// ── 官方 turn 折叠同步 ─────────────────────────────────────────────
